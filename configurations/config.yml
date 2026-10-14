@@ -1,0 +1,30 @@
+# ics_ecs 电商客服配置文件（Rasa 主配置 config.yml）
+# 作用：定义 Rasa 对话机器人的全局配置，包括配置格式版本（recipe）、对话语言（language）、命令生成流水线（pipeline）与对话策略（policies）
+
+# 配置格式版本：default.v1 是 Rasa 默认配置方案，决定本文件各键名的解析方式，保持默认即可。
+recipe: default.v1
+
+# 对话语言：zh 表示中文，影响 LLM 提示词与命令生成的语言
+language: zh
+
+# Pipeline 配置：定义"用户消息 -> 机器人命令"的理解流水线
+pipeline:
+  # 列表项1：LLMCommandGenerator —— CALM 架构核心组件，用大模型把用户消息翻译成结构化命令
+  - name: LLMCommandGenerator
+    # llm：以别名的方式引用 endpoints.yml 中的模型定义
+    llm: default
+
+# 策略配置：每轮对话按列表顺序询问各策略，由置信度最高的策略决定机器人下一步的动作
+policies:
+  - name: FlowPolicy  # 列表项1：FlowPolicy — 主策略
+  - name: EnterpriseSearchPolicy  # 列表项2：EnterpriseSearchPolicy — 企业知识检索兜底策略
+    llm: default  # 引用 endpoints.yml 中的模型定义
+    # vector_store：检索后端的 Python 类点路径，指向 addons 包的 GraphRAG 实现；
+    # 其链接参数（Neo4j bolt 地址，账号密码）在 endpoints.yml 的 vector_store 段配置
+    vector_store: addons.information_retrieval.GraphRAG
+
+
+
+
+
+
