@@ -1,0 +1,21 @@
+[project]
+name = "intelligent-customer-service"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "'Harry", email = "'1265567590@qq.com'" }
+]
+requires-python = ">=3.12"
+dependencies = []
+
+[project.scripts]
+intelligent-customer-service = "app:main"
+
+[build-system]
+requires = ["uv_build>=0.12.6,<0.13.0"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "app"
+module-root = "src"
