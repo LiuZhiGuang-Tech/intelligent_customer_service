@@ -1,0 +1,29 @@
+# ics_ecs 端点配置文件
+# 作用：声明 Rasa 机器人运行时依赖的全部外部端点—大模型、向量存储、业务数据库、对话状态存储与 NLG 行为，供 config.yml 中的组件按别名应用
+
+# LLM 模型配置
+models:
+  default:  # 别名：default，用于在 config.yml 中引用该模型
+    type: qwen  # 模型厂商类型
+    model: qwen3.8-flash  # 模型名称
+    api_key: ${DASHSCOPE_API_KEY}  # 鉴权密钥：${DASHSCOPE_API_KEY} 表示启动时从环境变量中获取
+    temperature: 0.1
+
+# 向量存储配置（Neo4j）
+vector_store:
+  uri: bolt://localhost:7687
+  username: neo4j
+  password: ${NEO4J_PASSWORD}
+
+# 数据库配置（MySQL）
+database:
+  url: mysql+pymysql://root:${MYSQL_PASSWORD}@localhost:3306/ecs
+
+# Tracker 存储配置（MySQL）
+tracker_store:
+  type: memory  # 保存在进程内存中，读写最快
+
+# NLG 配置
+nlg:
+  # 是否启用 LLM 重述功能：false 表示不重述，true 表示重述
+  rephrase_enabled: false
