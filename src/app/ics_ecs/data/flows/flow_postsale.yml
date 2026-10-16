@@ -1,0 +1,79 @@
+# yaml-language-server: $schema=http://json-schema.org/draft-07/schema#
+# ↑ IDE 专用指令（yaml-language-server 的 modeline，必须写在文件首行）：
+#   告诉 IDE 的 YAML 插件改用 JSON Schema draft-07 通用元 schema 校验本文件，
+#   顶掉被误匹配的 Kestra 工作流 schema（后者强制要求 id/namespace/tasks，
+#   对 Rasa flows 文件不适用，会报 "Missing property" 假告警）。
+#   它只是注释，仅影响 IDE 校验提示，对框架训练与运行无任何影响。
+# =============================================================================
+# 售后 Flow 定义（flow_postsale.yml）
+# =============================================================================
+# 文件作用：定义电商客服售后域的业务流程——申请退货/换货；训练时由框架
+#           加载为可执行流程图。
+# 执行流程：rasa 训练/启动时读取本文件，逐个 flow 解析为步骤序列；
+#           运行时 LLMCommandGenerator 依 description 匹配流程并 StartFlow，
+#           FlowPolicy 按 steps 顺序执行（本流程为线性结构，无 next 分支）——
+#           action/utter 播报询问、collect 收集槽位，末步提交售后申请。
+# 副作用：action_ask_order_id 查询 MySQL 订单表，action_check_postsale_eligible
+#         查询售后资格，action_apply_postsale 向售后表写入申请记录。
+# 主要依赖：domain.yml（槽位、响应与 Action 注册）、actions/（自定义 Action）。
+# 备注：适配 ics_ai 框架 Flow 语法。
+#
+# ------------------------------ 键名约定速查表 -------------------------------
+# | 键名        | 含义                       | 取值约定                       |
+# | version     | 训练数据格式版本           | 固定 "3.1"                     |
+# | flows       | Flow 定义容器              | 键为流程 ID（英文小写）        |
+# | name        | 流程显示名                 | 中文短句                       |
+# | description | 流程描述（LLM 匹配依据）   | 罗列用户典型说法               |
+# | steps       | 步骤序列                   | 顺序执行（默认走到 END）       |
+# | id          | 步骤标识                   | 流程内唯一                     |
+# | action      | 执行 Action 步骤           | 自定义 Action 名 / utter 响应名 |
+# | collect     | 收集槽位步骤               | 槽位名                         |
+# -----------------------------------------------------------------------------
+# 说明：action 取值为 utter_* 时直接播报 domain 预定义响应（纯文本，不查库）；
+#       取值为 action_* 时执行自定义 Action（可查询/修改数据库）。
+# =============================================================================
+
+# 训练数据格式版本：3.1 为 Rasa flows 语法版本，保持默认即可。
+version: "3.1"
+
+# Flow 定义容器：每个一级键为一个业务流程，流程间相互独立。
+flows:
+  # ============================ 流程：申请售后 ============================
+  # 申请售后的flow，严格按照以下设定的业务流程
+  apply_postsale:
+    # 流程显示名：Inspect 页面与日志中展示的名称。
+    name: 申请售后
+    # 流程描述：LLM 据此判断用户消息是否命中本流程（含典型说法）。
+    description: 当用户想要申请退货或换货时使用
+    # 步骤序列：线性结构，依次执行到末尾（无 next 分支）。
+    steps:
+      # 步骤1（id: ask_order）：执行 Action，查库筛选可申请售后的
+      # 候选订单，经按钮写入 postsale_order_id 供用户选择。
+      - id: ask_order
+        action: action_ask_order_id
+      # 步骤2（id: collect_order）：收集 postsale_order_id——
+      # 用户从 button 中选择一个订单。
+      - id: collect_order
+        collect: postsale_order_id
+      # 步骤3（id: check_eligible）：执行 Action，校验所选订单是否
+      # 符合售后条件（如时间窗口、订单状态）。
+      - id: check_eligible
+        action: action_check_postsale_eligible
+      # 步骤4（id: ask_type）：播报 domain 响应，询问售后类型
+      # （退货/换货，button 展示选项）。
+      - id: ask_type
+        action: utter_ask_postsale_type
+      # 步骤5（id: collect_type）：收集 postsale_type——用户选择售后类型。
+      - id: collect_type
+        collect: postsale_type
+      # 步骤6（id: ask_reason）：播报 domain 响应，询问售后原因。
+      - id: ask_reason
+        action: utter_ask_postsale_reason
+      # 步骤7（id: collect_reason）：收集 postsale_reason——
+      # 用户输入或选择售后原因。
+      - id: collect_reason
+        collect: postsale_reason
+      # 步骤8（id: apply）：执行 Action，提交售后申请并入库，
+      # 完成后流程结束。
+      - id: apply
+        action: action_apply_postsale

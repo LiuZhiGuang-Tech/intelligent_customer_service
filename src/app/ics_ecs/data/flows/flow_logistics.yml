@@ -1,0 +1,84 @@
+# yaml-language-server: $schema=http://json-schema.org/draft-07/schema#
+# ↑ IDE 专用指令（yaml-language-server 的 modeline，必须写在文件首行）：
+#   告诉 IDE 的 YAML 插件改用 JSON Schema draft-07 通用元 schema 校验本文件，
+#   顶掉被误匹配的 Kestra 工作流 schema（后者强制要求 id/namespace/tasks，
+#   对 Rasa flows 文件不适用，会报 "Missing property" 假告警）。
+#   它只是注释，仅影响 IDE 校验提示，对框架训练与运行无任何影响。
+# =============================================================================
+# 物流 Flow 定义（flow_logistics.yml）
+# =============================================================================
+# 文件作用：定义电商客服物流域的业务流程——查询支持的快递公司、查询已发货
+#           订单的物流信息；训练时由框架加载为可执行流程图。
+# 执行流程：rasa 训练/启动时读取本文件，逐个 flow 解析为步骤序列；
+#           运行时 LLMCommandGenerator 依 description 匹配流程并 StartFlow，
+#           FlowPolicy 按 steps 顺序执行——set_slots 预设槽位、collect 收集
+#           槽位、action 执行动作、next 按 if-then-else 跳转，END 表示结束。
+# 副作用：步骤调用的自定义 Action（action_get_logistics_companys /
+#         action_get_logistics_info）会查询 MySQL 物流与订单表。
+# 主要依赖：domain.yml（槽位与 Action 注册）、actions/（自定义 Action 实现）。
+# 备注：适配 ics_ai 框架 Flow 语法，复刻参考实现。
+#
+# ------------------------------ 键名约定速查表 -------------------------------
+# | 键名               | 含义                       | 取值约定                   |
+# | version            | 训练数据格式版本           | 固定 "3.1"                 |
+# | flows              | Flow 定义容器              | 键为流程 ID（英文小写）    |
+# | name               | 流程显示名                 | 中文短句                   |
+# | description        | 流程描述（LLM 匹配依据）   | 罗列用户典型说法           |
+# | steps              | 步骤序列                   | 顺序执行，next 控制跳转    |
+# | set_slots          | 预设槽位步骤               | 槽位名: 值 或 goto 列表    |
+# | goto               | 经 Action 预填槽位         | Action 名                  |
+# | collect            | 收集槽位步骤               | 槽位名                     |
+# | action             | 执行自定义 Action 步骤     | Action 名                  |
+# | next               | 后续步骤或条件分支         | 步骤 ID / END / if-then-else |
+# | if / then / else   | 条件分支                   | slots.<槽位> 表达式        |
+# -----------------------------------------------------------------------------
+# 哨兵值约定：自定义 Action 会向槽位写入特定字符串作为状态标记——
+#   order_id = "false"    用户未选中任何有效订单（放弃选择）
+# =============================================================================
+
+# 训练数据格式版本：3.1 为 Rasa flows 语法版本，保持默认即可。
+version: "3.1"
+
+# Flow 定义容器：每个一级键为一个业务流程，流程间相互独立。
+flows:
+  # ============================ 流程1：查询承运商 ============================
+  # 查询承运商的flow，严格按照以下设定的业务流程
+  query_logistics_companys:
+    # 流程显示名：Inspect 页面与日志中展示的名称。
+    name: 查询支持的快递公司
+    # 流程描述：LLM 据此判断用户消息是否命中本流程（含典型说法）。
+    description: 查询支持的快递公司
+    # 步骤序列。
+    steps:
+      # 步骤1：执行 Action 查库获取支持的快递公司列表并回复用户；
+      # 无需收集槽位，执行完默认走到 END。
+      - action: action_get_logistics_companys
+
+  # ==================== 流程2：查询已发货订单的物流信息 ====================
+  # 查询已发货订单的物流信息的flow，严格按照以下设定的业务流程
+  query_shipping_order_logistics:
+    # 流程显示名。
+    name: 查询进行中订单的物流信息
+    # 流程描述：LLM 匹配依据。
+    description: 查询订单的物流信息
+    # 步骤序列。
+    steps:
+      # 步骤1：预设槽位——查询已发货的订单（仅已发货状态才有物流可查）。
+      - set_slots:
+          # 列表项1：goto 调用该 Action，查库筛出"已发货"的候选订单，
+          # 经按钮写入 order_id 供用户选择。
+          - goto: action_ask_order_id_shipped
+      # 步骤2：收集 order_id——button 展示给用户，用户选择一个订单。
+      - collect: order_id
+        # 条件跳转：根据用户是否选中订单分流。
+        next:
+          # 列表项1（条件）：选中的订单id不是false（哨兵值=未选中有效订单）。
+          - if: slots.order_id != "false"
+            # 条件成立分支。
+            then:
+              # 执行action，查询此订单的物流信息。
+              - action: action_get_logistics_info
+                # 物流信息回复后流程结束。
+                next: END
+          # 列表项2（否则）：未选中订单（order_id=false），直接结束。
+          - else: END
