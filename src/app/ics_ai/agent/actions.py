@@ -73,6 +73,8 @@ class ActionResult:
                 的字典，供事件总线/日志消费。
         success: 是否执行成功；False 时上层可走错误处理路径。
         metadata: 额外元数据（自由扩展键值对）。
+        reject_action_listen: 拒绝监听标志；True 表示动作要求打断当前
+                              轮次监听（预留约定，上层暂未消费）。
     """
 
     # 响应列表：可变默认值经 field 工厂独立创建，避免实例间共享。
@@ -83,6 +85,9 @@ class ActionResult:
     success: bool = True
     # 元数据字典：可变默认值经 field 工厂独立创建。
     metadata: dict[str, Any] = field(default_factory=dict)
+    # 拒绝监听标志：True 表示动作要求打断当前轮次监听（预留约定，
+    # 上层暂未消费）；带默认值追加在末尾，不影响既有构造调用。
+    reject_action_listen: bool = False
 
     def add_response(self, text: str, **kwargs: Any) -> None:
         """添加文本响应。
