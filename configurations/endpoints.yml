@@ -5,7 +5,7 @@
 models:
   default:  # 别名：default，用于在 config.yml 中引用该模型
     type: qwen  # 模型厂商类型
-    model: qwen3.8-flash  # 模型名称
+    model: qwen-plus  # 模型名称
     api_key: ${DASHSCOPE_API_KEY}  # 鉴权密钥：${DASHSCOPE_API_KEY} 表示启动时从环境变量中获取
     temperature: 0.1
 
