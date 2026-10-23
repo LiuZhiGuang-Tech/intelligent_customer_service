@@ -1,29 +1,68 @@
-# ics_ecs 端点配置文件
-# 作用：声明 Rasa 机器人运行时依赖的全部外部端点—大模型、向量存储、业务数据库、对话状态存储与 NLG 行为，供 config.yml 中的组件按别名应用
+# =============================================================================
+# ics_ecs 端点配置文件（Rasa endpoints.yml）
+# =============================================================================
+# 文件作用：声明 Rasa 机器人运行时依赖的全部外部端点——大模型服务、向量存储、
+#           业务数据库、对话状态存储与 NLG 行为，供 config.yml 中的组件按别名引用。
+# 执行流程：Rasa 启动（rasa run / rasa shell）时加载本文件——
+#           1. config.yml 中 `llm: default` 的组件到 models.default 取模型参数；
+#           2. EnterpriseSearchPolicy（GraphRAG）按 vector_store 段连接 Neo4j；
+#           3. 自定义 Action 经 database 段访问电商业务库；
+#           4. tracker_store / nlg 决定对话状态持久化方式与回复生成行为。
+# 副作用：启动即建立对外连接（DashScope API、Neo4j、MySQL），并通过 ${VAR}
+#         语法读取环境变量；tracker_store=memory 时对话记录仅保存在进程内存。
+# 主要依赖：config.yml（引用本文件的组件）、环境变量 DASHSCOPE_API_KEY /
+#           NEO4J_PASSWORD / MYSQL_PASSWORD、本地运行的 Neo4j 与 MySQL 服务。
+#
+# ------------------------------ 键名约定速查表 -------------------------------
+# | 键名          | 含义                                  | 取值约定                        |
+# | models        | LLM 模型配置字典                      | 键为别名，供 config.yml 引用    |
+# | type / model  | 模型厂商类型 / 具体模型名             | qwen = 阿里通义千问系列         |
+# | api_key       | 模型服务鉴权密钥                      | ${ENV_VAR} 引用环境变量         |
+# | temperature   | 采样温度（越大输出越随机）            | 低值保证输出稳定、可复现        |
+# | vector_store  | 向量/图存储连接参数                   | uri 使用 bolt 协议访问 Neo4j    |
+# | database      | 业务数据库 SQLAlchemy 连接串          | 方言+驱动://用户:密码@主机/库名 |
+# | tracker_store | 对话状态（Tracker）存储方式           | memory=内存，重启即丢失         |
+# | nlg           | 自然语言生成行为配置                  | rephrase_enabled 控制 LLM 复述  |
+# -----------------------------------------------------------------------------
 
-# LLM 模型配置
+# LLM模型配置：config.yml 中 pipeline 与 policies 里的 `llm: default` 即指向此处。
 models:
-  default:  # 别名：default，用于在 config.yml 中引用该模型
-    type: qwen  # 模型厂商类型
-    model: qwen-plus  # 模型名称
-    api_key: ${DASHSCOPE_API_KEY}  # 鉴权密钥：${DASHSCOPE_API_KEY} 表示启动时从环境变量中获取
+  # 别名 default：供 LLMCommandGenerator 与 EnterpriseSearchPolicy 统一引用，
+  #   模型参数集中在一处管理，后续换模型只需改这里。
+  default:
+    # 模型厂商类型：qwen 表示走阿里 DashScope（通义千问）的接口协议。
+    type: qwen
+    # 具体模型：qwen-plus 在效果与成本之间折中，适合命令生成与答案组织。
+    model: qwen-plus
+    # 鉴权密钥：${DASHSCOPE_API_KEY} 表示启动时从同名环境变量读取，避免密钥明文入库。
+    api_key: ${DASHSCOPE_API_KEY}
+    # 采样温度 0.1：接近确定性输出，保证命令生成与流程跳转稳定、可复现。
     temperature: 0.1
 
-# 向量存储配置（Neo4j）
+# 向量存储配置 (Neo4j)：被 config.yml 中 EnterpriseSearchPolicy 的
+#   vector_store: app.ics_ecs.addons.information_retrieval.GraphRAG 用于知识检索。
 vector_store:
+  # 连接地址：bolt 是 Neo4j 的二进制协议，默认端口 7687，指向本机 Neo4j 实例。
   uri: bolt://localhost:7687
-  username: neo4j
+  # 登录用户名：Neo4j 默认账户名。
+  user: neo4j
+  # 登录密码：同 api_key，从环境变量读取，不在文件中保存明文。
   password: ${NEO4J_PASSWORD}
 
-# 数据库配置（MySQL）
+# 数据库配置 (MySQL)：电商业务库，自定义 Action（查订单、写库）通过它访问。
 database:
+  # SQLAlchemy 连接串：mysql+pymysql 指定使用 PyMySQL 驱动，
+  #   root 账号、密码取自环境变量，库名 ecs，端口 3306。
   url: mysql+pymysql://root:${MYSQL_PASSWORD}@localhost:3306/ecs
 
-# Tracker 存储配置（MySQL）
+# Tracker存储配置：决定对话状态（槽位、流程进度、历史消息）的存放位置。
 tracker_store:
-  type: memory  # 保存在进程内存中，读写最快
+  # memory：保存在进程内存中，读写最快；代价是服务重启即清空，
+  #   适合开发调试，生产环境建议改用 Redis 或 SQL 存储。
+  type: memory
 
-# NLG 配置
+# NLG配置：控制机器人回复文本的生成方式。
 nlg:
-  # 是否启用 LLM 重述功能：false 表示不重述，true 表示重述
+  # 关闭 LLM 复述改写：直接使用流程中写好的回复模板，不额外调用大模型，
+  #   省 token 且回复措辞稳定可控；如需更拟人化可改为 true。
   rephrase_enabled: false

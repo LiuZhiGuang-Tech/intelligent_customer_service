@@ -1,0 +1,59 @@
+# yaml-language-server: $schema=http://json-schema.org/draft-07/schema#
+# =============================================================================
+# domain_logistics.yml - 物流模块 Domain 定义文件
+# =============================================================================
+# 文件用途：
+#   定义物流查询业务的槽位与业务 Action 声明。与 domain_patterns.yml、
+#   domain_order.yml、domain_postsale.yml 同置于 domain/ 目录，由
+#   Agent.load 经 Domain.load 一并加载合并。本文件与
+#   data/flows/flow_logistics.yml 配套：流程步骤调用本文件声明的 Action
+#   完成承运商展示与物流轨迹查询。
+#
+# 执行流程：
+#   1. Agent.load 探测 domain/ 目录 → Domain.load 解析本文件顶层键；
+#   2. flow_logistics.yml 流程执行：先调用 action_get_logistics_companys
+#      展示承运商，再 collect order_id 后调用 action_get_logistics_info；
+#   3. action_get_logistics_info 查到物流单后回填 logistics_id 槽
+#      （tracker.set_slot），供后续动作（如售后投诉）复用。
+#
+# 副作用：无——本文件纯静态配置只读；数据查询副作用在 action_logistics.py。
+#
+# 主要依赖：
+#   - app.ics_ai.core.domain.Domain（解析与 has_action() 查询）
+#   - app.ics_ai.core.slots（SlotMapping：controlled=由 Action 写入）
+#   - app.ics_ecs.actions.action_logistics（本文件全部 Action 的实现）
+#   - data/flows/flow_logistics.yml（本文件 Action 的流程消费方）
+#
+# key 命名约定汇总表：
+#   version                       Domain 格式版本标记（沿用 Rasa 3.1 风格）
+#   slots.<槽名>.type             槽位类型：text=任意字符串
+#   slots.<槽名>.mappings[].type  controlled=由 Action 查询后写入（不经 LLM）
+#   actions[]                     业务 Action 声明名（Domain.has_action 校验）
+# =============================================================================
+
+# 格式版本标记：声明沿用 Rasa 3.1 风格的 Domain 结构，供加载器做格式兼容识别。
+version: "3.1"
+
+# 物流业务槽位：键名即 tracker.get_slot() 的查询键。
+slots:
+  # === 查询物流 ===
+  # 槽位 logistics_id：物流单号（logistics 表主键，String(50)）。
+  # 由 action_get_logistics_info 查到物流单后经 tracker.set_slot 回填
+  # （action_logistics.py），供售后投诉等后续动作定位物流单复用。
+  logistics_id:
+    # type: text——物流单号为任意字符串，无枚举值域。
+    type: text
+    # 槽位映射：controlled——由 Action 查询后写入，不经 LLM 提取。
+    mappings:
+      # 列表项 1：controlled——值由 Action 控制写入。
+      - type: controlled
+
+# 物流业务 Action 声明：向 Domain 注册 Action 名（has_action 校验），
+# 实现均位于 actions/action_logistics.py，运行期只读查询 MySQL 物流与订单表。
+actions:
+  # === 查询承运商 ===
+  # 获取支持的承运商：全表查询 LogisticsCompany 表并展示。
+  - action_get_logistics_companys
+  # 查询物流信息：按指定订单 ID 查询物流单与完整轨迹，
+  # 同时把物流 ID 回填 logistics_id 槽供后续动作使用。
+  - action_get_logistics_info

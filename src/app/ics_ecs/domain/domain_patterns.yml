@@ -1,0 +1,94 @@
+# yaml-language-server: $schema=http://json-schema.org/draft-07/schema#
+# =============================================================================
+# domain_patterns.yml - 通用 Domain 定义文件
+# =============================================================================
+# 文件用途：
+#   定义跨业务（订单/物流/售后）通用的槽位与响应模板。与 domain_order.yml、
+#   domain_logistics.yml、domain_postsale.yml 同置于 domain/ 目录，由
+#   Agent.load 回退探测到目录后经 Domain.load 一并加载，共同构成完整 Domain。
+#
+# 执行流程：
+#   1. Agent.load 按 config.domain_path 探测单文件 domain.yml，未命中则
+#      回退探测 domain/ 目录，加载目录下全部定义文件；
+#   2. Domain.load 解析本文件的 version / slots / responses 三个顶层键；
+#   3. 运行期：槽位经 tracker.get_slot("user_id") 查询；响应模板经
+#      Domain.get_response("utter_xxx") 按名查询，多条变体由 random.choice
+#      随机命中一条，避免机器人每次回复同一句。
+#
+# 副作用：无——纯静态配置，加载期只读，不写文件、不连网络/数据库。
+#
+# 主要依赖：
+#   - app.ics_ai.core.domain.Domain（解析与 get_response()/get_slot() 查询）
+#   - app.ics_ai.policies.enterprise_search_policy（utter_default 等模板消费方）
+#   - app.ics_ai.nlg.template_nlg（模板渲染：随机选变体 + {slot} 槽位替换）
+#
+# key 命名约定汇总表：
+#   version                    Domain 格式版本标记（沿用 Rasa 3.1 风格约定）
+#   slots.<slot_name>          槽位名，即 tracker.get_slot("...") 的查询键
+#   slots.<slot_name>.type     槽位类型，text 表示任意字符串（无枚举值域）
+#   slots.<slot_name>.description  槽位业务说明，供维护者理解，不做运行时校验
+#   responses.utter_<动作名>   响应模板键，utter_ 前缀 + 全小写下划线命名
+#   responses.<名>[] 列表项    同一模板的候选变体，运行期随机选一条
+# =============================================================================
+
+# 格式版本标记：声明沿用 Rasa 3.1 风格的 Domain 结构，供加载器做格式兼容识别。
+version: "3.1"
+
+# 通用槽位定义：跨业务流程共享的槽位，键名即 tracker.get_slot() 的查询键。
+slots:
+  # 槽位 user_id：当前查询用户的 ID，订单/收货地址等业务动作用它过滤数据。
+  # 消费方：action_order.py 等动作读取 tracker.get_slot("user_id")，
+  # 未取到时兜底演示账号 "1001"。
+  user_id:
+    # type: text——槽位类型为任意字符串；用户 ID 无固定枚举值域，故不用 categorical。
+    type: text
+    # description：槽位的业务说明，仅供维护者理解用途，不参与运行时逻辑。
+    description: 用户ID
+
+# 通用响应模板：键为 utter_<动作名>，值为候选变体列表。
+# 查询路径：Domain.get_response 按名返回模板列表（未命中返回空列表，
+# 由调用方降级处理为空文本），运行期 random.choice 随机选一条变体。
+responses:
+  # 兜底回复：策略无法理解用户意图时的默认话术。
+  # 消费方：enterprise_search_policy.py 的兜底分支直接查询本键。
+  utter_default:
+    # 列表项 1（候选变体）：委婉表达未理解，引导用户换种说法。
+    - text: "抱歉，我没有理解您的意思。请换一种方式表达。"
+    # 列表项 2（候选变体）：同义换措辞，随机命中以增加回复多样性。
+    - text: "不好意思，我不太明白您的意思，能换个说法吗？"
+
+  # 服务延续话术：完成一轮服务后主动询问下一步需求。
+  # 消费方：enterprise_search_policy.py 直接查询本键。
+  utter_can_do_something_else:
+    # 列表项 1（候选变体）：简短版追问。
+    - text: "还有什么我可以帮您的吗？"
+    # 列表项 2（候选变体）：礼貌版追问。
+    - text: "请问还有其他需要帮助的吗？"
+
+  # 转人工话术：问题超出机器人能力范围时告知用户即将转接人工客服。
+  # 消费方：enterprise_search_policy.py 的人工转接分支直接查询本键。
+  utter_human_handoff:
+    # 列表项 1（候选变体）：转人工场景话术唯一即可，无需多变体。
+    - text: "好的，正在为您转接人工客服，请稍候..."
+
+  # 欢迎语：会话开场问候与自我介绍。
+  # 预留通用模板：遵循 utter_ 命名约定保留，供开场流程/响应动作按名引用。
+  utter_welcome:
+    # 列表项 1（候选变体）：自报身份 + 引导用户提问。
+    - text: "您好！我是电商客服助手，有什么可以帮您的吗？"
+
+  # 闲聊承接话术：识别到闲聊意图时回应，并把话题引回核心业务域。
+  # 预留通用模板：遵循 utter_ 命名约定保留，供闲聊分支按名引用。
+  utter_chitchat_response:
+    # 列表项 1（候选变体）：确认收到 + 列举可服务的业务范围。
+    - text: "好的，我明白了。还有什么关于订单、物流或售后的问题我可以帮您的吗？"
+    # 列表项 2（候选变体）：简短确认 + 追问下一步需求。
+    - text: "嗯嗯，请问还有其他需要帮助的吗？"
+
+  # 无法处理话术：明确告知能力边界，并给出替代建议。
+  # 预留通用模板：遵循 utter_ 命名约定保留，供 CannotHandle 兜底分支按名引用。
+  utter_cannot_handle:
+    # 列表项 1（候选变体）：建议换一种描述方式或转人工。
+    - text: "抱歉，这个问题我暂时无法处理。您可以尝试换一种方式描述，或者联系人工客服。"
+    # 列表项 2（候选变体）：引导回订单/物流/售后三个核心业务域。
+    - text: "不好意思，我没能理解您的需求。请问您是想查询订单、物流还是申请售后呢？"

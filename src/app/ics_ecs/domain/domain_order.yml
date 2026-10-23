@@ -1,0 +1,265 @@
+# yaml-language-server: $schema=http://json-schema.org/draft-07/schema#
+# =============================================================================
+# domain_order.yml - 订单模块 Domain 定义文件
+# =============================================================================
+# 文件用途：
+#   定义订单业务（查询/修改/取消）的槽位、询问话术与业务 Action 声明。
+#   与 domain_patterns.yml、domain_logistics.yml、domain_postsale.yml 同置于
+#   domain/ 目录，由 Agent.load 经 Domain.load 一并加载合并。
+#   本文件与 data/flows/flow_order.yml 配套：流程 collect 步骤按
+#   "utter_ask_<槽名> / action_ask_<槽名>" 命名约定自动调用本文件的
+#   话术与 Action 完成槽位收集。
+#
+# 执行流程：
+#   1. Agent.load 探测 domain/ 目录 → Domain.load 解析本文件四个顶层键；
+#   2. 运行期：流程 collect 槽位 → 自动调用 utter_ask_*(静态话术) 或
+#      action_ask_*(动态 Action)；
+#   3. 按钮点击回传 /SetSlots(槽=值) DSL 消息，understand 节点经
+#      SetSlotCommand 直接解析写槽（绕过 LLM）；
+#   4. 声明的 Action 由 actions/action_order.py 实现，查询/修改 MySQL。
+#
+# 副作用：无——本文件纯静态配置只读；数据落库副作用在 action_order.py。
+#
+# 主要依赖：
+#   - app.ics_ai.core.domain.Domain（解析与 has_action()/get_response() 查询）
+#   - app.ics_ai.core.slots（SlotMapping：from_llm/controlled；initial_value 语义）
+#   - app.ics_ai.dialogue_understanding.commands.slot_commands（SetSlotCommand
+#     解析按钮 payload "/SetSlots(...)"）
+#   - app.ics_ecs.actions.action_order（本文件全部 Action 的实现）
+#   - data/flows/flow_order.yml（本文件槽位/话术/Action 的流程消费方）
+#
+# key 命名约定汇总表：
+#   version                        Domain 格式版本标记（沿用 Rasa 3.1 风格）
+#   slots.<槽名>.type              槽位类型：text=任意字符串，bool=布尔
+#   slots.<槽名>.initial_value     初始值；tracker reset() 恢复到此值
+#   slots.<槽名>.mappings[].type   from_llm=LLM 从用户输入提取；
+#                                  controlled=由 Action 查询后写入；
+#                                  缺省 mappings=由流程步骤/按钮 DSL 直接写入
+#   responses.utter_ask_<槽名>     collect 步骤自动调用的静态询问话术
+#   responses.<名>[].buttons[]     话术附带的快捷按钮，payload 为回传 DSL
+#   actions[]                      业务 Action 声明名（Domain.has_action 校验）
+#
+# 哨兵值约定（与 flow_order.yml 的条件分支对应）：
+#   order_id   = "false"     用户未选中任何有效订单（放弃选择）
+#   receive_id = "false"     用户放弃修改收货信息
+#   receive_id = "modify"    用户选择"修改并新建收货信息"
+#   receive_id = "modified"  本轮已至少完成一项内容修改
+# =============================================================================
+
+# 格式版本标记：声明沿用 Rasa 3.1 风格的 Domain 结构，供加载器做格式兼容识别。
+version: "3.1"
+
+# 订单相关槽位：键名即 tracker.get_slot() 的查询键，仅声明订单业务使用的槽位。
+slots:
+  # === 切换用户 ===
+  # 槽位 user_id：订单查询的身份标识（过滤某用户的订单/收货信息）。
+  # 注意：domain_patterns.yml 中另有同名通用定义（无初始值/映射），
+  # 本文件为订单业务扩展配置，附带初始值与 LLM 提取映射。
+  user_id:
+    # type: text——用户 ID 为任意字符串，无枚举值域。
+    type: text
+    # initial_value: "1001"——演示账号；tracker reset() 会恢复到此值，
+    # 与 action_order.py 的兜底逻辑 tracker.get_slot("user_id") or "1001" 对齐。
+    initial_value: "1001"
+    # 槽位映射：声明值的写入来源。
+    mappings:
+      # 列表项 1：from_llm——由 LLM 从用户输入中提取（如"我是1001"）。
+      - type: from_llm
+
+  # === 查询订单 ===
+  # 槽位 goto：控制订单查询条件的路由槽，值为待调用的特化 Action 变体名
+  # （如 action_ask_order_id_before_shipped）；无 mappings——由流程
+  # goto/set_slots 步骤直接写入，不经 LLM 提取。
+  goto:
+    type: text
+
+  # 槽位 order_id：订单 ID。
+  order_id:
+    type: text
+    # 槽位映射：controlled——由 Action 查库筛出候选订单，经按钮点选回填；
+    # 可能写入哨兵值 "false"（用户放弃选择）。
+    mappings:
+      # 列表项 1：controlled——值由 Action 控制写入，不走 LLM 提取。
+      - type: controlled
+
+  # === 修改订单 ===
+  # 槽位 receive_id：收货信息 ID，选定要修改哪条收货地址。
+  receive_id:
+    type: text
+    # 槽位映射：controlled——由 action_ask_receive_id 列出地址按钮回填；
+    # 哨兵值见文件头（"false"/"modify"/"modified"）。
+    mappings:
+      # 列表项 1：controlled——值由 Action 控制写入。
+      - type: controlled
+
+  # 槽位 modify_content：用户要修改的内容（收货人姓名/电话/地址）。
+  # 无 mappings——由 utter_ask_modify_content 的按钮 payload
+  # "/SetSlots(modify_content=...)" 点击直接写入。
+  modify_content:
+    type: text
+
+  # 槽位 receiver_name：新收货人姓名。
+  receiver_name:
+    type: text
+    # 槽位映射：from_llm——用户直接口述姓名，LLM 从输入提取。
+    mappings:
+      # 列表项 1：from_llm——LLM 提取填充。
+      - type: from_llm
+
+  # 槽位 receiver_phone：新收货人电话。
+  receiver_phone:
+    type: text
+    # 槽位映射：from_llm——用户口述号码，LLM 从输入提取。
+    mappings:
+      # 列表项 1：from_llm——LLM 提取填充。
+      - type: from_llm
+
+  # 槽位 receive_province：收货地址——省。
+  receive_province:
+    type: text
+    # 槽位映射：controlled——由 action_ask_receive_province 查行政区划库
+    # 经按钮选择写入，避免 LLM 猜测地名产生歧义。
+    mappings:
+      # 列表项 1：controlled——值由 Action 控制写入。
+      - type: controlled
+
+  # 槽位 receive_city：收货地址——市。
+  receive_city:
+    type: text
+    # 槽位映射：controlled——由 action_ask_receive_city 按已选省份联动写入。
+    mappings:
+      # 列表项 1：controlled——值由 Action 控制写入。
+      - type: controlled
+
+  # 槽位 receive_district：收货地址——区/县。
+  receive_district:
+    type: text
+    # 槽位映射：controlled——由 action_ask_receive_district 按已选市联动写入。
+    mappings:
+      # 列表项 1：controlled——值由 Action 控制写入。
+      - type: controlled
+
+  # 槽位 receive_street_address：收货地址——街道详址。
+  receive_street_address:
+    type: text
+    # 槽位映射：from_llm——详址为自由文本，LLM 从用户输入提取。
+    mappings:
+      # 列表项 1：from_llm——LLM 提取填充。
+      - type: from_llm
+
+  # 槽位 if_modify_continue：是否继续修改其他信息。
+  # 无 mappings——由 utter_ask_if_modify_continue 的"是/否"按钮写入。
+  if_modify_continue:
+    # type: bool——布尔槽位，按钮 payload 写入 true/false 字面量。
+    type: bool
+
+  # 槽位 set_receive_info：是否确认将修改后的收货信息写入数据库。
+  set_receive_info:
+    type: bool
+    # 槽位映射：controlled——由 action_ask_set_receive_info 的确认按钮写入。
+    mappings:
+      # 列表项 1：controlled——值由 Action 控制写入。
+      - type: controlled
+
+  # === 取消订单 ===
+  # 槽位 if_cancel_order：是否确认取消订单。
+  # 无 mappings——由 utter_ask_if_cancel_order 的"是/否"按钮写入。
+  if_cancel_order:
+    # type: bool——布尔槽位，true 触发 action_cancel_order 执行取消。
+    type: bool
+
+# 订单相关响应：键遵循 utter_ask_<槽名> 约定，流程 collect 收集对应槽位时
+# 自动调用；查询未命中时 Domain.get_response 返回空列表（调用方降级）。
+responses:
+  # === 切换用户的响应 ===
+  # collect user_id 步骤自动调用：提示用户输入/切换用户 ID。
+  utter_ask_user_id:
+    # 列表项 1（候选变体）：单一话术即可。
+    - text: "请输入 user_id"
+
+  # === 修改订单的相关响应 ===
+  # collect modify_content 步骤自动调用：让用户选择要修改的内容，
+  # 按钮点击后 payload 经 SetSlotCommand 写入 modify_content 槽。
+  utter_ask_modify_content:
+    # 列表项 1（候选变体）：话术 + 四个修改项快捷按钮。
+    - text: "请选择要修改的内容"
+      # 按钮列表：payload 为 /SetSlots(槽=值) DSL，点击即写槽（绕过 LLM）。
+      buttons:
+        # 列表项 1：选择修改"收货人姓名"。
+        - title: "收货人姓名"
+          payload: "/SetSlots(modify_content=收货人姓名)"
+        # 列表项 2：选择修改"收货人电话"。
+        - title: "收货人电话"
+          payload: "/SetSlots(modify_content=收货人电话)"
+        # 列表项 3：选择修改"收货地址"（省/市/区/详址四个槽联动收集）。
+        - title: "收货地址"
+          payload: "/SetSlots(modify_content=收货地址)"
+        # 列表项 4：放弃修改，写入哨兵值 false 终止修改分支。
+        - title: "取消"
+          payload: "/SetSlots(modify_content=false)"
+
+  # collect receiver_name 步骤自动调用：追问新收货人姓名。
+  utter_ask_receiver_name:
+    # 列表项 1（候选变体）：单一话术即可。
+    - text: "请输入收货人姓名"
+
+  # collect receiver_phone 步骤自动调用：追问新收货人电话。
+  utter_ask_receiver_phone:
+    # 列表项 1（候选变体）：单一话术即可。
+    - text: "请输入收货人电话"
+
+  # collect receive_street_address 步骤自动调用：追问街道详址。
+  utter_ask_receive_street_address:
+    # 列表项 1（候选变体）：单一话术即可。
+    - text: "请输入收货街道地址"
+
+  # collect if_modify_continue 步骤自动调用：询问是否继续修改其他信息。
+  utter_ask_if_modify_continue:
+    # 列表项 1（候选变体）：话术 + 是/否两个快捷按钮。
+    - text: "是否继续修改其他信息？"
+      # 按钮列表：payload 为 /SetSlots(if_modify_continue=...) DSL。
+      buttons:
+        # 列表项 1：继续修改，槽位写 true。
+        - title: "是"
+          payload: "/SetSlots(if_modify_continue=true)"
+        # 列表项 2：结束修改，槽位写 false。
+        - title: "否"
+          payload: "/SetSlots(if_modify_continue=false)"
+
+  # === 取消订单的响应 ===
+  # collect if_cancel_order 步骤自动调用：确认是否取消订单。
+  utter_ask_if_cancel_order:
+    # 列表项 1（候选变体）：话术 + 是/否两个快捷按钮。
+    - text: "是否取消此订单？"
+      # 按钮列表：payload 为 /SetSlots(if_cancel_order=...) DSL。
+      buttons:
+        # 列表项 1：确认取消，槽位写 true → 流程执行 action_cancel_order。
+        - title: "是"
+          payload: "/SetSlots(if_cancel_order=true)"
+        # 列表项 2：放弃取消，槽位写 false。
+        - title: "否"
+          payload: "/SetSlots(if_cancel_order=false)"
+
+# 订单相关Action声明：向 Domain 注册业务 Action 名（has_action 校验），
+# 实现均位于 actions/action_order.py，运行期会查询/修改 MySQL 订单与收货表。
+actions:
+  # 统一的订单查询 Action（ActionAskOrderId）：run 内按 goto 传入的特化名
+  # 分派查询条件（before_completed_3_days/before_delivered/before_shipped/
+  # shipped 等变体，见 action_order.py 的 case 分支），查库后经按钮回填 order_id。
+  - action_ask_order_id
+  # 获取订单详情：按 order_id 查询并展示订单明细。
+  - action_get_order_detail
+  # === 修改订单相关action ===
+  # 询问选择现有收货信息，或选择"修改并新建收货信息"（写 receive_id 哨兵值）。
+  - action_ask_receive_id
+  # 询问收货省：查行政区划经按钮选择（写 receive_province）。
+  - action_ask_receive_province
+  # 询问收货市：按已选省份联动查询（写 receive_city）。
+  - action_ask_receive_city
+  # 询问收货区：按已选市联动查询（写 receive_district）。
+  - action_ask_receive_district
+  # 询问确认修改收货信息（写 set_receive_info），确认后执行新收货信息入库。
+  - action_ask_set_receive_info
+  # === 取消订单相关action ===
+  # 取消订单：将订单状态置"已取消"并落库。
+  - action_cancel_order
