@@ -1,30 +1,54 @@
+# =============================================================================
 # ics_ecs 电商客服配置文件（Rasa 主配置 config.yml）
-# 作用：定义 Rasa 对话机器人的全局配置，包括配置格式版本（recipe）、对话语言（language）、命令生成流水线（pipeline）与对话策略（policies）
+# =============================================================================
+# 文件作用：定义 Rasa 对话机器人的全局配置，包括配置格式版本（recipe）、
+#           对话语言（language）、命令生成流水线（pipeline）与对话策略（policies）。
+# 执行流程：Rasa 启动/训练（rasa run、rasa train）时读取本文件——
+#           1. 按 recipe 确定配置键名的解析方案；
+#           2. 按 pipeline 装配 LLM 命令生成器（CALM 架构核心组件）；
+#           3. 按 policies 注册对话策略，每轮对话按顺序询问各策略并采纳最高置信度者的动作。
+# 副作用：pipeline/policies 中的 LLM 组件会联网调用 endpoints.yml 中配置的外部大模型
+#         服务（DashScope 通义千问 qwen-plus）；EnterpriseSearchPolicy 会经 GraphRAG
+#         连接向量存储（Neo4j，见 endpoints.yml 的 vector_store 段）检索知识。
+# 主要依赖：endpoints.yml（LLM 与向量存储连接参数）、flows/（FlowPolicy 执行的流程定义）、
+#           app.ics_ecs.addons 包（information_retrieval.GraphRAG 检索后端实现）。
+#
+# ------------------------------ 键名约定速查表 -------------------------------
+# | 键名         | 含义                                 | 取值约定                        |
+# | recipe       | 配置文件格式版本（决定键名解析规则） | 固定使用 default.v1             |
+# | language     | 机器人对话语言（ISO 639-1 代码）     | zh = 中文                       |
+# | pipeline     | 消息理解/命令生成流水线组件列表      | 列表项须含 name 键指定组件名    |
+# | policies     | 对话策略列表（按顺序依次询问）       | 列表项须含 name 键指定策略名    |
+# | llm          | 组件引用的 LLM 配置别名              | 指向 endpoints.yml 的模型定义   |
+# | vector_store | 检索策略使用的向量存储实现类         | Python 模块点路径字符串         |
+# -----------------------------------------------------------------------------
 
 # 配置格式版本：default.v1 是 Rasa 默认配置方案，决定本文件各键名的解析方式，保持默认即可。
 recipe: default.v1
 
-# 对话语言：zh 表示中文，影响 LLM 提示词与命令生成的语言
+# 对话语言：zh 表示机器人面向中文用户，影响 LLM 提示词与命令生成的语言。
 language: zh
 
-# Pipeline 配置：定义"用户消息 -> 机器人命令"的理解流水线
+# Pipeline配置：定义"用户消息 -> 机器人命令"的理解流水线。
 pipeline:
-  # 列表项1：LLMCommandGenerator —— CALM 架构核心组件，用大模型把用户消息翻译成结构化命令
+  # 列表项1：LLMCommandGenerator —— CALM 架构核心组件，用大模型把用户消息
+  #   翻译成结构化命令（如 StartFlow、SetSlot），替代传统 NLU 意图分类方案。
   - name: LLMCommandGenerator
-    # llm：以别名的方式引用 endpoints.yml 中的模型定义
-    llm: default
+    # llm：以别名方式引用 endpoints.yml 中的模型定义（qwen-plus，temperature=0.1，
+    #   低温度保证命令生成的稳定性与可复现性）。
+    llm: default  # 引用endpoints.yml中的模型配置
 
-# 策略配置：每轮对话按列表顺序询问各策略，由置信度最高的策略决定机器人下一步的动作
+# 策略配置：每轮对话按列表顺序询问各策略，由置信度最高的策略决定机器人下一步动作。
 policies:
-  - name: FlowPolicy  # 列表项1：FlowPolicy — 主策略
-  - name: EnterpriseSearchPolicy  # 列表项2：EnterpriseSearchPolicy — 企业知识检索兜底策略
-    llm: default  # 引用 endpoints.yml 中的模型定义
-    # vector_store：检索后端的 Python 类点路径，指向 addons 包的 GraphRAG 实现；
-    # 其链接参数（Neo4j bolt 地址，账号密码）在 endpoints.yml 的 vector_store 段配置
-    vector_store: addons.information_retrieval.GraphRAG
-
-
-
-
-
-
+  # 列表项1：FlowPolicy —— 流程驱动型主策略，负责执行 flows/ 目录中定义的业务流程，
+  #   处理流程推进、槽位填充与流程间跳转，承载电商客服的主要业务对话。
+  - name: FlowPolicy
+  # 列表项2：EnterpriseSearchPolicy —— 企业知识检索兜底策略：当所有流程都无法
+  #   匹配用户问题时，先从向量知识库检索相关内容，再由 LLM 组织成自然语言答案回复。
+  - name: EnterpriseSearchPolicy
+    # llm：答案生成所用的模型别名，同样复用 endpoints.yml 中的 default（qwen-plus）。
+    llm: default
+    # vector_store：检索后端的 Python 类点路径，指向 app.ics_ecs.addons 包的
+    #   GraphRAG 实现；其连接参数（Neo4j bolt 地址、账号密码）在
+    #   endpoints.yml 的 vector_store 段配置。
+    vector_store: app.ics_ecs.addons.information_retrieval.GraphRAG

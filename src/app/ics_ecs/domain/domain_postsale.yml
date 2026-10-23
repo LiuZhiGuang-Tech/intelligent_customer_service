@@ -1,0 +1,90 @@
+# yaml-language-server: $schema=http://json-schema.org/draft-07/schema#
+# =============================================================================
+# domain_postsale.yml - 售后模块 Domain 定义文件
+# =============================================================================
+# 文件用途：
+#   定义售后业务（退货退款/换货申请）的槽位、询问话术与业务 Action 声明。
+#   与 domain_patterns.yml、domain_order.yml、domain_logistics.yml 同置于
+#   domain/ 目录，由 Agent.load 经 Domain.load 一并加载合并。
+#   本文件与 data/flows/flow_postsale.yml 配套：流程按步骤播报本文件的
+#   utter_ask_* 话术、collect 本文件的槽位，末步调用 action_apply_postsale。
+#
+# 执行流程：
+#   1. Agent.load 探测 domain/ 目录 → Domain.load 解析本文件顶层键；
+#   2. flow_postsale.yml 流程执行：action_ask_order_id 筛候选订单 →
+#      collect postsale_order_id → action_check_postsale_eligible 校验
+#      售后资格 → 播报 utter_ask_postsale_type/utter_ask_postsale_reason
+#      并 collect 对应槽位 → action_apply_postsale 创建售后申请；
+#   3. action_apply_postsale 读取 order_id/postsale_type/postsale_reason/
+#      user_id 四个槽位，任一缺失即兜底拒绝，齐备后写入售后表。
+#
+# 副作用：无——本文件纯静态配置只读；落库副作用在 action_postsale.py。
+#
+# 主要依赖：
+#   - app.ics_ai.core.domain.Domain（解析与 has_action()/get_response() 查询）
+#   - app.ics_ecs.actions.action_postsale（本文件 Action 的实现）
+#   - data/flows/flow_postsale.yml（本文件槽位/话术/Action 的流程消费方）
+#
+# key 命名约定汇总表：
+#   version                    Domain 格式版本标记（沿用 Rasa 3.1 风格）
+#   slots.<槽名>               槽位名，即 tracker.get_slot("...") 的查询键
+#   slots.<槽名>.type          槽位类型：text=任意字符串
+#   slots.<槽名>.description   槽位业务说明，供维护者理解，不做运行时校验
+#   responses.utter_ask_<槽名> 询问话术，由流程 action 步骤显式播报
+#   actions[]                  业务 Action 声明名（Domain.has_action 校验）
+# =============================================================================
+
+# 格式版本标记：声明沿用 Rasa 3.1 风格的 Domain 结构，供加载器做格式兼容识别。
+version: "3.1"
+
+# 售后相关槽位：键名即 tracker.get_slot() 的查询键。
+# 三个槽位均无 mappings——值由 flow_postsale.yml 的 collect 步骤收集
+# （候选订单经按钮 payload 写入，类型/原因经用户选择或 LLM 提取写入）。
+slots:
+  # 槽位 postsale_order_id：申请售后的订单 ID。
+  # 由 action_ask_order_id（domain_order.yml 声明的统一订单查询 Action）
+  # 查库筛出候选订单，经按钮点选回填（flow_postsale.yml collect 步骤）。
+  postsale_order_id:
+    # type: text——订单 ID 为任意字符串，无枚举值域。
+    type: text
+    # description：槽位业务说明，仅供维护者理解用途，不参与运行时逻辑。
+    description: 售后订单ID
+
+  # 槽位 postsale_type：售后类型（退货退款/换货，与话术菜单选项对应）；
+  # action_apply_postsale 按该值映射售后单初始状态（status_map）。
+  postsale_type:
+    # type: text——类型取值有限但话术菜单控制，无需 categorical 枚举约束。
+    type: text
+    # description：槽位业务说明，仅供维护者理解用途。
+    description: 售后类型（退货/换货）
+
+  # 槽位 postsale_reason：售后原因描述，随售后申请单写入售后表。
+  postsale_reason:
+    # type: text——原因为自由文本。
+    type: text
+    # description：槽位业务说明，仅供维护者理解用途。
+    description: 售后原因
+
+# 售后相关响应：键遵循 utter_ask_<槽名> 约定，由 flow_postsale.yml 的
+# action 步骤显式播报（非 collect 自动调用）；查询未命中时
+# Domain.get_response 返回空列表（调用方降级）。
+responses:
+  # 询问售后类型：流程在 collect postsale_type 前播报。
+  utter_ask_postsale_type:
+    # 列表项 1（候选变体）：菜单式话术（\n 换行展示两个选项），
+    # 用户回复由 LLM 提取为 postsale_type 槽值。
+    - text: "请选择售后类型：\n1. 退货退款\n2. 换货"
+
+  # 询问售后原因：流程在 collect postsale_reason 前播报。
+  utter_ask_postsale_reason:
+    # 列表项 1（候选变体）：开放追问，原因由 LLM 从用户输入提取。
+    - text: "请说明您申请售后的原因："
+
+# 售后相关Action声明：向 Domain 注册业务 Action 名（has_action 校验），
+# 实现均位于 actions/action_postsale.py，运行期查询/写入 MySQL 售后表。
+actions:
+  # 校验售后资格：按 postsale_order_id 查询订单，判断是否满足售后条件。
+  - action_check_postsale_eligible
+  # 提交售后申请：读取 order_id/postsale_type/postsale_reason/user_id 槽，
+  # 任一缺失即兜底拒绝；齐备后按售后类型映射初始状态并写入售后表。
+  - action_apply_postsale
