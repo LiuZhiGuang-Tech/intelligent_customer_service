@@ -44,17 +44,21 @@ flows:
     # 流程显示名：Inspect 页面与日志中展示的名称。
     name: 申请售后
     # 流程描述：LLM 据此判断用户消息是否命中本流程（含典型说法）。
-    description: 当用户想要申请退货或换货时使用
+    description: 当用户想要申请售后、退货或换货时使用
     # 步骤序列：线性结构，依次执行到末尾（无 next 分支）。
     steps:
-      # 步骤1（id: ask_order）：执行 Action，查库筛选可申请售后的
-      # 候选订单，经按钮写入 postsale_order_id 供用户选择。
+      # 步骤1（id: ask_order）：预设槽位——把 goto 置为"已签收及之后"
+      # 特化查询，使统一订单查询 Action 按 status_code >= 330 筛出
+      # 可售后候选订单（未设 goto 会走默认分支查出全部状态订单）。
       - id: ask_order
-        action: action_ask_order_id
-      # 步骤2（id: collect_order）：收集 postsale_order_id——
-      # 用户从 button 中选择一个订单。
+        set_slots:
+          # 列表项 1：goto 预设查询场景，ActionAskOrderId 据此分派过滤条件，
+          # 经按钮写入 order_id 供用户选择。
+          - goto: action_ask_order_id_after_delivered
+      # 步骤2（id: collect_order）：收集 order_id——用户从按钮点选后
+      # payload 写入 order_id 槽（与后续 action 读槽一致）。
       - id: collect_order
-        collect: postsale_order_id
+        collect: order_id
       # 步骤3（id: check_eligible）：执行 Action，校验所选订单是否
       # 符合售后条件（如时间窗口、订单状态）。
       - id: check_eligible

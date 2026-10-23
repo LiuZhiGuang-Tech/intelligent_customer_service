@@ -1,0 +1,47 @@
+{
+  "sender_id": "shell_user",
+  "slots": {},
+  "dialogue_turns": [
+    {
+      "user_message": {
+        "text": "你们的售后时间是几点？",
+        "sender_id": "shell_user",
+        "timestamp": 1792737681.8716874,
+        "input_channel": null,
+        "metadata": {}
+      },
+      "bot_messages": [],
+      "commands": [],
+      "action_name": null,
+      "timestamp": 1792737681.8716874
+    },
+    {
+      "user_message": {
+        "text": "你们的售后时间是几点？",
+        "sender_id": "shell_user",
+        "timestamp": 1792739464.516543,
+        "input_channel": null,
+        "metadata": {}
+      },
+      "bot_messages": [],
+      "commands": [],
+      "action_name": null,
+      "timestamp": 1792739464.516543
+    }
+  ],
+  "dialogue_stack": {
+    "frames": []
+  },
+  "flow_history": [],
+  "latest_action_name": "action_listen",
+  "latest_message": {
+    "text": "你们的售后时间是几点？",
+    "sender_id": "shell_user",
+    "timestamp": 1792739464.516543,
+    "input_channel": null,
+    "metadata": {}
+  },
+  "paused": false,
+  "created_at": 1792737681.8330047,
+  "updated_at": 1792739464.516543
+}
